@@ -9,7 +9,6 @@ import {
   uuid4,
 } from "@temporalio/workflow";
 import type * as activities from "./activities";
-import { OFFER_CUTOFF_MINUTES } from "./policy";
 import type {
   Attempt,
   OfferAnswer,
@@ -29,8 +28,11 @@ const { sendText, bookAppointment, notifyStaff } = proxyActivities<typeof activi
 export const getOpeningState = defineQuery<OpeningState>("getOpeningState");
 // Staff: the appointment or stylist is no longer available — stop offering it.
 export const cancelOpening = defineSignal<[{ reason: string }]>("cancelOpening");
-// Staff: a client asked to be taken off the waitlist.
-export const removeClient = defineSignal<[{ clientId: string }]>("removeClient");
+// Staff changed the waitlist (added a client, edited availability, removed someone).
+// `eligible` says whether this client now matches this opening.
+export const waitlistChanged = defineSignal<[{ client: WaitlistClient; eligible: boolean; reason: string }]>(
+  "waitlistChanged",
+);
 // Client: tapped Accept or Decline on the offer link. An Update so they get an immediate,
 // authoritative answer ("you're booked" vs "already taken").
 export const respondToOffer = defineUpdate<OfferReply, [{ offerId: string; answer: OfferAnswer }]>(
@@ -38,20 +40,23 @@ export const respondToOffer = defineUpdate<OfferReply, [{ offerId: string; answe
 );
 
 // One Workflow per opening. It offers the slot to ONE matching client at a time, so two
-// clients can never both accept, and it moves on automatically when someone declines or
-// the reply window runs out.
+// clients can never both accept. It moves on automatically when someone declines or the reply
+// window runs out, and keeps going — including clients who become eligible later — until
+// someone accepts, staff cancel, or the appointment time passes.
 export async function openingWorkflow(input: OpeningInput): Promise<OpeningState> {
-  const { opening, candidates, appUrl, msPerMinute, windowMinutes } = input;
+  const { opening, appUrl, msPerMinute, windowMinutes } = input;
   const startsAtMs = Date.parse(opening.startsAt);
-  const removed = new Set<string>();
+  const clients = new Map<string, WaitlistClient>(input.candidates.map((c) => [c.id, c]));
+  const ineligible = new Map<string, string>(); // clientId -> reason
   let cancelled = false;
   let answer: OfferAnswer | undefined;
+  let staffToldListExhausted = false;
 
   const state: OpeningState = {
     opening,
     status: "offering",
     startedAt: new Date().toISOString(),
-    queue: candidates.map((c) => ({ clientId: c.id, clientName: c.name })),
+    queue: input.candidates.map((c) => ({ clientId: c.id, clientName: c.name })),
     attempts: [],
     events: [],
     messages: [],
@@ -62,7 +67,9 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
     const { sentAt } = await sendText({ to: client.phone, clientName: client.name, body });
     state.messages.push({ at: sentAt, to: client.phone, clientName: client.name, kind, body, link });
   };
-  const isFinished = () => !["offering", "booking"].includes(state.status);
+  const isOpen = () => state.status === "offering" || state.status === "waiting";
+  const isFinished = () => !isOpen() && state.status !== "booking";
+  const msUntilStart = () => startsAtMs - Date.now();
   const bookingReply = (): OfferReply =>
     state.status === "filled"
       ? { result: "confirmed", message: `You're booked for ${opening.label} with ${opening.stylist}. See you then!` }
@@ -71,7 +78,7 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
   setHandler(getOpeningState, () => state);
 
   setHandler(cancelOpening, ({ reason }) => {
-    if (state.status !== "offering") {
+    if (!isOpen()) {
       log(`Cancel request ignored: opening is already ${state.status}.`);
       return;
     }
@@ -80,11 +87,27 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
     log(`Staff cancelled the opening: ${reason}`);
   });
 
-  setHandler(removeClient, ({ clientId }) => {
-    removed.add(clientId);
-    const queued = state.queue.find((q) => q.clientId === clientId);
-    if (queued) log(`${queued.clientName} was removed from the waitlist and will not be contacted.`);
-    state.queue = state.queue.filter((q) => q.clientId !== clientId);
+  setHandler(waitlistChanged, ({ client, eligible, reason }) => {
+    if (!isOpen()) return;
+    clients.set(client.id, client);
+    const alreadyContacted = state.attempts.some((a) => a.clientId === client.id);
+    const queued = state.queue.some((q) => q.clientId === client.id);
+    if (eligible) {
+      ineligible.delete(client.id);
+      if (queued) {
+        // Keep the queue entry; their details (e.g. name) may have changed.
+      } else if (!alreadyContacted) {
+        state.queue.push({ clientId: client.id, clientName: client.name });
+        state.queue.sort((a, b) => clients.get(a.clientId)!.joinedAt.localeCompare(clients.get(b.clientId)!.joinedAt));
+        log(`${client.name} now matches (${reason}) and was added to the queue.`);
+      }
+    } else {
+      ineligible.set(client.id, reason);
+      if (queued) {
+        state.queue = state.queue.filter((q) => q.clientId !== client.id);
+        log(`${client.name} no longer matches (${reason}) and won't be contacted.`);
+      }
+    }
   });
 
   setHandler(
@@ -92,7 +115,7 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
     async ({ offerId, answer: reply }): Promise<OfferReply> => {
       const attempt = state.attempts.find((a) => a.offerId === offerId);
       if (!attempt) return { result: "unknown_offer", message: "We couldn't find this offer." };
-      const client = candidates.find((c) => c.id === attempt.clientId)!;
+      const client = clients.get(attempt.clientId)!;
 
       // Repeat tap after accepting: report the booking result.
       if (attempt.outcome === "accepted") {
@@ -110,7 +133,7 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
         return bookingReply();
       }
 
-      // Late or stale reply: the offer has moved on. Tell them kindly; never double-book.
+      // Late or stale reply: the offer has moved on. It can never claim the opening.
       log(`Late reply from ${client.name} (${reply}) — told the opening is no longer available.`);
       if (reply === "accept") {
         await text(
@@ -127,21 +150,28 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
   );
 
   log(
-    `Opening posted: ${opening.service} with ${opening.stylist}, ${opening.label}. ${candidates.length} matching client(s), ${windowMinutes} min each to reply.`,
+    `Opening posted: ${opening.service} with ${opening.stylist}, ${opening.label}. ${state.queue.length} matching client(s), ${windowMinutes} min each to reply.`,
   );
 
-  while (state.queue.length > 0 && !cancelled) {
-    const next = state.queue.shift()!;
-    const client = candidates.find((c) => c.id === next.clientId)!;
-
-    const minutesUntilStart = (startsAtMs - Date.now()) / 60_000;
-    const minutesUntilCutoff = minutesUntilStart - OFFER_CUTOFF_MINUTES;
-    if (minutesUntilCutoff <= 0) {
-      state.status = "expired";
-      log("Too close to the appointment time to keep offering.");
-      break;
+  while (!cancelled && msUntilStart() > 0) {
+    // Everyone matching has been contacted: keep watching for newly eligible clients
+    // (added to the list or availability edited) until the appointment time.
+    if (state.queue.length === 0) {
+      state.status = "waiting";
+      if (!staffToldListExhausted) {
+        staffToldListExhausted = true;
+        log("Everyone who matches has been contacted. Watching for new matches until the appointment time.");
+        await notifyStaff({ note: `${opening.label} ${opening.service} is still open; everyone matching has been contacted.` });
+      }
+      await condition(() => state.queue.length > 0 || cancelled, Math.max(1, msUntilStart()));
+      if (state.status === "waiting") state.status = "offering";
+      continue;
     }
-    const waitMs = Math.min(windowMinutes * msPerMinute, minutesUntilCutoff * 60_000);
+
+    const next = state.queue.shift()!;
+    const client = clients.get(next.clientId)!;
+    // Never hold the offer past the appointment time.
+    const waitMs = Math.max(1, Math.min(windowMinutes * msPerMinute, msUntilStart()));
 
     const offerId = uuid4();
     const link = `${appUrl}/offer.html?w=${encodeURIComponent(opening.id)}&o=${offerId}`;
@@ -165,7 +195,7 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
     answer = undefined;
     log(`Offered to ${client.name}; holding it for ${windowMinutes} min.`);
 
-    await condition(() => answer !== undefined || cancelled || removed.has(client.id), waitMs);
+    await condition(() => answer !== undefined || cancelled || ineligible.has(client.id), waitMs);
     attempt.resolvedAt = new Date().toISOString();
 
     if (answer === "accept") {
@@ -192,9 +222,9 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
         "no_longer_available",
         `Sorry ${client.name}, the ${opening.service} opening on ${opening.label} is no longer available. You're still on our waitlist.`,
       );
-    } else if (removed.has(client.id)) {
+    } else if (ineligible.has(client.id)) {
       attempt.outcome = "removed";
-      log(`${client.name} was removed from the waitlist while holding the offer.`);
+      log(`${client.name} no longer matches (${ineligible.get(client.id)}) while holding the offer — moving on.`);
     } else {
       attempt.outcome = "timed_out";
       log(`${client.name} didn't reply in ${windowMinutes} min — moving to the next person.`);
@@ -203,16 +233,15 @@ export async function openingWorkflow(input: OpeningInput): Promise<OpeningState
     if (state.status === "filled") break;
   }
 
-  if (state.status === "offering") {
+  if (state.status !== "filled") {
     if (cancelled) {
       state.status = "cancelled";
     } else {
       state.status = "unfilled";
-      log("Nobody else on the waitlist matches. Staff alerted.");
-      await notifyStaff({ note: `No one took ${opening.service} with ${opening.stylist}, ${opening.label}.` });
+      state.unfilledReason = "The appointment time arrived without anyone accepting.";
+      log(state.unfilledReason);
+      await notifyStaff({ note: `${opening.label} ${opening.service} with ${opening.stylist} was not filled.` });
     }
-  } else if (state.status === "expired") {
-    await notifyStaff({ note: `Stopped offering ${opening.label}: too close to start time.` });
   }
 
   state.finishedAt = new Date().toISOString();

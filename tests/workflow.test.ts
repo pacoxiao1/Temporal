@@ -5,7 +5,7 @@ import { Worker } from "@temporalio/worker";
 import type { WorkflowHandle } from "@temporalio/client";
 import { matchCandidates, offerWindowMinutes } from "../src/policy";
 import type { Opening, OpeningState, WaitlistClient } from "../src/types";
-import { cancelOpening, getOpeningState, openingWorkflow, respondToOffer } from "../src/workflows";
+import { cancelOpening, getOpeningState, openingWorkflow, respondToOffer, waitlistChanged } from "../src/workflows";
 
 const TASK_QUEUE = "waitlist-test";
 let env: TestWorkflowEnvironment;
@@ -146,6 +146,50 @@ test("staff can cancel an opening; the client holding the offer is told and nobo
     // Accepting the withdrawn offer afterwards still can't book anything.
     assert.equal(state.attempts[0].clientName, "Ana");
   });
+});
+
+test("after everyone is contacted it keeps watching, and offers a client whose availability now matches", async () => {
+  bookings.length = 0;
+  const handle = await env.client.workflow.start(openingWorkflow, {
+    workflowId: "keep-going-test",
+    taskQueue: TASK_QUEUE,
+    args: [{ opening: await opening("keep-going-test"), candidates: [client("a", "Ana")], appUrl: "http://test", msPerMinute: 60_000, windowMinutes: 120 }],
+  });
+  const first = await waitForOffer(handle, 1);
+  await handle.executeUpdate(respondToOffer, { args: [{ offerId: first.currentOfferId!, answer: "decline" }] });
+
+  // List exhausted: the opening stays open instead of giving up.
+  let state = await handle.query(getOpeningState);
+  for (let i = 0; i < 100 && state.status !== "waiting"; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    state = await handle.query(getOpeningState);
+  }
+  assert.equal(state.status, "waiting");
+
+  // Staff widen Zoe's availability; she now matches and is offered the slot.
+  await handle.signal(waitlistChanged, { client: client("z", "Zoe"), eligible: true, reason: "availability updated" });
+  const second = await waitForOffer(handle, 2);
+  assert.equal(second.attempts[1].clientName, "Zoe");
+  const accept = await handle.executeUpdate(respondToOffer, { args: [{ offerId: second.currentOfferId!, answer: "accept" }] });
+  assert.equal(accept.result, "confirmed");
+  const result = await handle.result();
+  assert.equal(result.status, "filled");
+  assert.deepEqual(bookings, ["Zoe"]);
+});
+
+test("if nobody accepts, the opening stays open until the appointment time, then ends unfilled", async () => {
+  bookings.length = 0;
+  const handle = await env.client.workflow.start(openingWorkflow, {
+    workflowId: "unfilled-test",
+    taskQueue: TASK_QUEUE,
+    args: [{ opening: await opening("unfilled-test"), candidates: [client("a", "Ana"), client("b", "Ben")], appUrl: "http://test", msPerMinute: 60_000, windowMinutes: 120 }],
+  });
+  // Nobody replies; the test server skips time until the appointment (3 days out).
+  const result = await handle.result();
+  assert.equal(result.status, "unfilled");
+  assert.deepEqual(result.attempts.map((a) => a.outcome), ["timed_out", "timed_out"]);
+  assert.ok(Date.parse(result.finishedAt!) >= Date.parse(result.opening.startsAt));
+  assert.deepEqual(bookings, []);
 });
 
 test("matching follows Lena's rules: service, stylist preference, availability, earliest sign-up first", () => {

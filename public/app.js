@@ -4,19 +4,20 @@ const esc = (value) =>
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const STATUS_TEXT = {
   offering: "Offering",
+  waiting: "Waiting for new matches",
   booking: "Booking…",
   filled: "Filled",
   unfilled: "Not filled",
   cancelled: "Cancelled",
-  expired: "Stopped (too close)",
 };
+const ACTIVE = ["offering", "waiting", "booking"];
 const OUTCOME_TEXT = {
   pending: "Holding offer",
   accepted: "Accepted",
   declined: "Declined",
   timed_out: "Timed out",
   withdrawn: "Withdrawn (cancelled)",
-  removed: "Removed from list",
+  removed: "No longer matches",
 };
 
 let clockSkewMs = 0; // server time minus browser time, for countdowns
@@ -92,9 +93,11 @@ function renderOpening(o) {
   else if (current) {
     const left = Math.max(0, Date.parse(current.expiresAt) - now);
     headline = `Now offered to <strong>${esc(current.clientName)}</strong> · ${duration(left)} left to reply`;
-  } else if (o.status === "unfilled") headline = "Everyone matching was contacted. Nobody took it.";
+  } else if (o.status === "waiting") {
+    headline = `Everyone who matches has been contacted. Still open until ${time(o.opening.startsAt)}: add a client
+      or update someone's availability on the waitlist and they'll be offered it automatically.`;
+  } else if (o.status === "unfilled") headline = esc(o.unfilledReason ?? "Not filled.");
   else if (o.status === "cancelled") headline = `Cancelled: ${esc(o.cancelReason)}`;
-  else if (o.status === "expired") headline = "Stopped: too close to the appointment time.";
   else headline = "Starting…";
 
   const rows = o.attempts
@@ -105,7 +108,7 @@ function renderOpening(o) {
     })
     .join("");
   const queued = o.status === "offering" && o.queue.length ? `<p class="small muted">Next up: ${o.queue.map((q) => esc(q.clientName)).join(" → ")}</p>` : "";
-  const canCancel = o.status === "offering";
+  const canCancel = o.status === "offering" || o.status === "waiting";
 
   return `<article class="opening ${o.status}">
     <div class="opening-head">
@@ -125,14 +128,62 @@ function renderOpening(o) {
   </article>`;
 }
 
-function renderStats(openings) {
-  const done = openings.filter((o) => !["offering", "booking"].includes(o.status));
+// ---- Reporting: which openings get filled and how long they take ---------------------------
+// Fill rate counts filled vs. not filled; openings staff cancelled are reported separately.
+function summarize(openings) {
   const filled = openings.filter((o) => o.status === "filled");
-  const avg = filled.length ? filled.reduce((sum, o) => sum + o.timeToFillMs, 0) / filled.length : 0;
+  const unfilled = openings.filter((o) => o.status === "unfilled");
+  const cancelled = openings.filter((o) => o.status === "cancelled");
+  const decided = filled.length + unfilled.length;
+  const times = filled.map((o) => o.timeToFillMs).sort((a, b) => a - b);
+  return {
+    posted: openings.length,
+    active: openings.filter((o) => ACTIVE.includes(o.status)).length,
+    filled: filled.length,
+    unfilled: unfilled.length,
+    cancelled: cancelled.length,
+    fillRate: decided ? Math.round((filled.length / decided) * 100) : null,
+    avgFill: times.length ? times.reduce((a, b) => a + b, 0) / times.length : null,
+    medianFill: times.length ? times[Math.floor(times.length / 2)] : null,
+    avgContacted: filled.length ? filled.reduce((sum, o) => sum + o.attempts.length, 0) / filled.length : null,
+  };
+}
+
+function renderStats(openings) {
+  const s = summarize(openings);
   $("#stats").innerHTML = `
-    <div><strong>${openings.length - done.length}</strong><span>active</span></div>
-    <div><strong>${filled.length}/${done.length}</strong><span>filled</span></div>
-    <div><strong>${filled.length ? duration(avg) : "–"}</strong><span>avg time to fill</span></div>`;
+    <div><strong>${s.active}</strong><span>active</span></div>
+    <div><strong>${s.fillRate === null ? "–" : `${s.fillRate}%`}</strong><span>filled (${s.filled}/${s.filled + s.unfilled})</span></div>
+    <div><strong>${s.avgFill === null ? "–" : duration(s.avgFill)}</strong><span>avg time to fill</span></div>`;
+}
+
+function renderReport(openings) {
+  const all = summarize(openings);
+  if (!all.posted) return;
+  const services = [...new Set(openings.map((o) => o.opening.service))].sort();
+  const row = (label, s) => `<tr><td>${esc(label)}</td><td>${s.posted}</td><td>${s.filled}</td><td>${s.unfilled}</td>
+    <td>${s.cancelled}</td><td><strong>${s.fillRate === null ? "–" : `${s.fillRate}%`}</strong></td>
+    <td>${s.avgFill === null ? "–" : duration(s.avgFill)}</td><td>${s.avgContacted === null ? "–" : s.avgContacted.toFixed(1)}</td></tr>`;
+  const finished = openings.filter((o) => !ACTIVE.includes(o.status));
+  $("#report").innerHTML = `
+    <div class="report-kpis">
+      <div><strong>${all.fillRate === null ? "–" : `${all.fillRate}%`}</strong><span>of decided openings filled</span></div>
+      <div><strong>${all.medianFill === null ? "–" : duration(all.medianFill)}</strong><span>median time to fill</span></div>
+      <div><strong>${all.avgContacted === null ? "–" : all.avgContacted.toFixed(1)}</strong><span>clients contacted per fill</span></div>
+      <div><strong>${all.cancelled}</strong><span>cancelled by staff</span></div>
+    </div>
+    <table>
+      <thead><tr><th>Service</th><th>Posted</th><th>Filled</th><th>Not filled</th><th>Cancelled</th><th>Fill rate</th><th>Avg time to fill</th><th>Contacted per fill</th></tr></thead>
+      <tbody>${services.map((svc) => row(svc, summarize(openings.filter((o) => o.opening.service === svc)))).join("")}
+        ${services.length > 1 ? row("All services", all) : ""}</tbody>
+    </table>
+    ${finished.length ? `<details><summary>Finished openings (${finished.length})</summary><table>
+      <thead><tr><th>Opening</th><th>Result</th><th>Contacted</th><th>Time to fill</th></tr></thead>
+      <tbody>${finished
+        .map((o) => `<tr><td>${esc(o.opening.service)} · ${esc(o.opening.stylist)} · ${esc(o.opening.label)}</td>
+          <td><span class="pill ${o.status}">${STATUS_TEXT[o.status] ?? esc(o.status)}</span>${o.bookedClientName ? ` ${esc(o.bookedClientName)}` : ""}</td>
+          <td>${o.attempts.length}</td><td>${o.timeToFillMs ? duration(o.timeToFillMs) : "–"}</td></tr>`)
+        .join("")}</tbody></table></details>` : ""}`;
 }
 
 function renderMessages(openings) {
@@ -154,13 +205,18 @@ async function refreshOpenings() {
   const { openings, now } = await api("/api/openings");
   clockSkewMs = Date.parse(now) - Date.now();
   lastOpenings = openings;
+  // Active openings first, then the most recent finished ones.
+  const shown = [...openings.filter((o) => ACTIVE.includes(o.status)), ...openings.filter((o) => !ACTIVE.includes(o.status))].slice(0, 8);
   const openDetails = new Set([...document.querySelectorAll("#openings details[open]")].map((d) => d.closest("article").dataset.id));
-  $("#openings").innerHTML = openings.length ? openings.map(renderOpening).join("") : `<p class="muted">No openings yet.</p>`;
+  $("#openings").innerHTML = shown.length ? shown.map(renderOpening).join("") : `<p class="muted">No openings yet.</p>`;
   document.querySelectorAll("#openings article").forEach((el, i) => {
-    el.dataset.id = openings[i].opening.id;
+    el.dataset.id = shown[i].opening.id;
     if (openDetails.has(el.dataset.id)) el.querySelector("details").open = true;
   });
+  const reportOpen = $("#report details")?.open;
   renderStats(openings);
+  renderReport(openings);
+  if (reportOpen) $("#report details").open = true;
   renderMessages(openings);
 }
 
@@ -174,23 +230,70 @@ $("#openings").addEventListener("click", async (event) => {
 });
 
 // ---- Waitlist ----------------------------------------------------------------------------
+let stylists = [];
+let editingId = null;
+
+function editForm(c) {
+  return `<form class="form edit-form" data-edit-form="${esc(c.id)}">
+    <label>Stylist <select name="stylist">${["Any", ...stylists]
+      .map((s) => `<option ${s === c.stylist ? "selected" : ""}>${esc(s)}</option>`)
+      .join("")}</select></label>
+    <fieldset class="days">${DAYS.map(
+      (d) => `<label><input type="checkbox" name="days" value="${d}" ${c.days.includes(d) ? "checked" : ""} /> ${d}</label>`,
+    ).join("")}</fieldset>
+    <div class="row">
+      <label>From <input type="time" name="from" value="${esc(c.from)}" /></label>
+      <label>To <input type="time" name="to" value="${esc(c.to)}" /></label>
+    </div>
+    <div class="row"><button type="submit">Save</button><button type="button" class="secondary" data-cancel-edit>Cancel</button></div>
+    <p class="error"></p>
+  </form>`;
+}
+
 async function refreshWaitlist() {
   const list = await api("/api/waitlist");
   $("#waitlist").innerHTML = `<ul class="waitlist">${list
     .map(
-      (c) => `<li><div><strong>${esc(c.name)}</strong> <span class="muted small">${esc(c.phone)}</span><br />
+      (c) => `<li><div class="grow"><strong>${esc(c.name)}</strong> <span class="muted small">${esc(c.phone)}</span><br />
         <span class="small">${esc(c.service)} · ${c.stylist === "Any" ? "any stylist" : esc(c.stylist)} ·
-        ${c.days.length === 7 ? "any day" : esc(c.days.join(", "))} ${esc(c.from)}–${esc(c.to)}</span></div>
-        <button class="link" data-remove="${esc(c.id)}" title="Remove from waitlist">Remove</button></li>`,
+        ${c.days.length === 7 ? "any day" : esc(c.days.join(", "))} ${esc(c.from)}–${esc(c.to)}</span>
+        ${editingId === c.id ? editForm(c) : ""}</div>
+        <div class="row-actions">
+          <button class="link edit" data-edit="${esc(c.id)}" title="Change stylist or availability">Edit</button>
+          <button class="link" data-remove="${esc(c.id)}" title="Remove from waitlist">Remove</button>
+        </div></li>`,
     )
     .join("")}</ul>`;
 }
 
 $("#waitlist").addEventListener("click", async (event) => {
-  const id = event.target.dataset?.remove;
-  if (!id || !confirm("Remove this client from the waitlist?")) return;
-  await api(`/api/waitlist/${id}`, { method: "DELETE" });
-  await Promise.all([refreshWaitlist(), updatePreview()]);
+  const { edit, remove } = event.target.dataset ?? {};
+  if (edit) {
+    editingId = editingId === edit ? null : edit;
+    await refreshWaitlist();
+  } else if (event.target.hasAttribute?.("data-cancel-edit")) {
+    editingId = null;
+    await refreshWaitlist();
+  } else if (remove && confirm("Remove this client from the waitlist?")) {
+    await api(`/api/waitlist/${remove}`, { method: "DELETE" });
+    await Promise.all([refreshWaitlist(), updatePreview()]);
+  }
+});
+
+// Saving availability also updates any opening still being offered (see broadcastWaitlistChange).
+$("#waitlist").addEventListener("submit", async (event) => {
+  const id = event.target.dataset?.editForm;
+  if (!id) return;
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const body = { ...Object.fromEntries(form), days: form.getAll("days") };
+  try {
+    await api(`/api/waitlist/${id}`, { method: "PUT", body });
+    editingId = null;
+    await Promise.all([refreshWaitlist(), updatePreview(), refreshOpenings()]);
+  } catch (error) {
+    event.target.querySelector(".error").textContent = error.message;
+  }
 });
 
 $("#waitlist-form").addEventListener("submit", async (event) => {
@@ -201,7 +304,7 @@ $("#waitlist-form").addEventListener("submit", async (event) => {
   try {
     await api("/api/waitlist", { method: "POST", body });
     event.target.reset();
-    await Promise.all([refreshWaitlist(), updatePreview()]);
+    await Promise.all([refreshWaitlist(), updatePreview(), refreshOpenings()]);
   } catch (error) {
     alert(error.message);
   }
@@ -211,6 +314,7 @@ $("#waitlist-form").addEventListener("submit", async (event) => {
 async function init() {
   const config = await api("/api/config");
   const options = (values) => values.map((v) => `<option>${esc(v)}</option>`).join("");
+  stylists = config.stylists;
   $("#service").innerHTML = options(config.services);
   $("#stylist").innerHTML = options(config.stylists);
   $("#window").innerHTML = config.windowChoices

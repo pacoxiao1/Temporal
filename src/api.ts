@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { Client, Connection, WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
+import { Client, Connection, WorkflowExecutionAlreadyStartedError, WorkflowNotFoundError } from "@temporalio/client";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { LATER_WINDOW_CHOICES, matchCandidates, offerWindowMinutes } from "./policy";
 import type { OfferAnswer, OfferReply, Opening, OpeningState, WaitlistClient } from "./types";
-import { cancelOpening, getOpeningState, openingWorkflow, removeClient, respondToOffer } from "./workflows";
+import { cancelOpening, getOpeningState, openingWorkflow, respondToOffer, waitlistChanged } from "./workflows";
 
 const TASK_QUEUE = "juniper-waitlist";
 const port = Number(process.env.PORT ?? 3000);
@@ -30,7 +30,7 @@ let clientPromise: Promise<Client> | undefined;
 function getClient(): Promise<Client> {
   clientPromise ??= Connection.connect({
     address: process.env.TEMPORAL_ADDRESS ?? "localhost:7233",
-  }).then((connection) => new Client({ connection, namespace: "default" }));
+  }).then((connection) => new Client({ connection, namespace: "default", identity: "juniper-api" }));
   return clientPromise;
 }
 
@@ -43,6 +43,18 @@ async function runningOpeningIds(): Promise<string[]> {
     ids.push(wf.workflowId);
   }
   return ids;
+}
+
+// Tell every opening that is still being offered about a waitlist change, so a client who
+// now matches gets queued and one who no longer matches is skipped.
+async function broadcastWaitlistChange(entry: WaitlistClient, reason: string, removed = false) {
+  const client = await getClient();
+  for (const id of await runningOpeningIds()) {
+    const handle = client.workflow.getHandle(id);
+    const { opening } = await handle.query(getOpeningState);
+    const eligible = !removed && matchCandidates(opening, [entry]).length > 0;
+    await handle.signal(waitlistChanged, { client: entry, eligible, reason });
+  }
 }
 
 function slug(value: string) {
@@ -67,10 +79,22 @@ app.get("/api/waitlist", (_request, response) => {
   response.json([...waitlist].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt)));
 });
 
-app.post("/api/waitlist", (request, response) => {
+const TIME = /^\d{2}:\d{2}$/;
+function availabilityError(body: any): string | undefined {
+  const { stylist, days, from, to } = body ?? {};
+  if (stylist && stylist !== "Any" && !STYLISTS.includes(stylist)) return "Unknown stylist.";
+  if (!Array.isArray(days) || days.length === 0) return "Pick at least one day.";
+  if ((from && !TIME.test(from)) || (to && !TIME.test(to)) || (from && to && from >= to)) {
+    return "The 'from' time must be before the 'to' time.";
+  }
+  return undefined;
+}
+
+app.post("/api/waitlist", async (request, response) => {
   const { name, phone, service, stylist, days, from, to } = request.body ?? {};
-  if (!name || !phone || !SERVICES.includes(service) || !Array.isArray(days) || days.length === 0) {
-    response.status(400).json({ error: "Name, mobile, service and at least one day are required." });
+  const invalid = availabilityError(request.body);
+  if (!name || !phone || !SERVICES.includes(service) || invalid) {
+    response.status(400).json({ error: invalid ?? "Name, mobile and service are required." });
     return;
   }
   const entry: WaitlistClient = {
@@ -86,18 +110,35 @@ app.post("/api/waitlist", (request, response) => {
   };
   waitlist.push(entry);
   saveWaitlist();
+  await broadcastWaitlistChange(entry, "joined the waitlist");
   response.status(201).json(entry);
 });
 
+// Staff adjust a client's stylist preference or availability without digging through the sheet.
+app.put("/api/waitlist/:id", async (request, response) => {
+  const entry = waitlist.find((c) => c.id === request.params.id);
+  if (!entry) {
+    response.status(404).json({ error: "Client not found." });
+    return;
+  }
+  const invalid = availabilityError(request.body);
+  if (invalid) {
+    response.status(400).json({ error: invalid });
+    return;
+  }
+  const { stylist, days, from, to } = request.body;
+  Object.assign(entry, { stylist: stylist || "Any", days, from: from || entry.from, to: to || entry.to });
+  saveWaitlist();
+  await broadcastWaitlistChange(entry, "availability updated");
+  response.json(entry);
+});
+
 app.delete("/api/waitlist/:id", async (request, response) => {
-  const clientId = request.params.id;
-  waitlist = waitlist.filter((c) => c.id !== clientId);
+  const entry = waitlist.find((c) => c.id === request.params.id);
+  waitlist = waitlist.filter((c) => c.id !== request.params.id);
   saveWaitlist();
   // Make sure in-progress openings stop considering this person too.
-  const client = await getClient();
-  for (const id of await runningOpeningIds()) {
-    await client.workflow.getHandle(id).signal(removeClient, { clientId });
-  }
+  if (entry) await broadcastWaitlistChange(entry, "removed from the waitlist", true);
   response.status(204).end();
 });
 
@@ -145,6 +186,18 @@ app.post("/api/openings", async (request, response) => {
   const opening: Opening = { ...parsed, id: `opening-${slug(parsed.stylist)}-${parsed.date}-${parsed.time.replace(":", "")}` };
   const candidates = matchCandidates(opening, waitlist);
   const client = await getClient();
+  // A finished opening for this slot may be re-posted only if it wasn't filled
+  // (e.g. it was cancelled by mistake). A filled slot must never be offered again.
+  try {
+    const previous = client.workflow.getHandle(opening.id);
+    const { status } = await previous.describe();
+    if (status.name === "COMPLETED" && (await previous.result()).status === "filled") {
+      response.status(409).json({ error: "This slot has already been filled from the waitlist." });
+      return;
+    }
+  } catch {
+    // No earlier opening for this slot.
+  }
   try {
     await client.workflow.start(openingWorkflow, {
       workflowId: opening.id,
@@ -161,16 +214,25 @@ app.post("/api/openings", async (request, response) => {
   response.status(201).json({ id: opening.id, candidates: candidates.length });
 });
 
+// Finished openings never change, so their final result is cached for the reports.
+const finishedOpenings = new Map<string, OpeningState>(); // runId -> final state
+
 app.get("/api/openings", async (_request, response) => {
   const client = await getClient();
   const states: OpeningState[] = [];
-  for await (const wf of client.workflow.list({ query: `WorkflowType = 'openingWorkflow'`, pageSize: 25 })) {
+  for await (const wf of client.workflow.list({ query: `WorkflowType = 'openingWorkflow'`, pageSize: 100 })) {
     try {
-      states.push(await client.workflow.getHandle(wf.workflowId, wf.runId).query(getOpeningState));
+      const handle = client.workflow.getHandle(wf.workflowId, wf.runId);
+      if (wf.status.name === "RUNNING") {
+        states.push(await handle.query(getOpeningState));
+      } else if (wf.status.name === "COMPLETED") {
+        if (!finishedOpenings.has(wf.runId)) finishedOpenings.set(wf.runId, await handle.result());
+        states.push(finishedOpenings.get(wf.runId)!);
+      }
     } catch {
       // A just-started Workflow may not have run its first task yet; it appears on the next poll.
     }
-    if (states.length >= 25) break;
+    if (states.length >= 100) break;
   }
   states.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   response.json({ openings: states, now: new Date().toISOString() });
@@ -179,14 +241,25 @@ app.get("/api/openings", async (_request, response) => {
 app.post("/api/openings/:id/cancel", async (request, response) => {
   const client = await getClient();
   const reason = String(request.body?.reason || "Appointment or stylist no longer available");
-  await client.workflow.getHandle(request.params.id).signal(cancelOpening, { reason });
+  try {
+    await client.workflow.getHandle(request.params.id).signal(cancelOpening, { reason });
+  } catch (error) {
+    if (error instanceof WorkflowNotFoundError) {
+      response.status(409).json({ error: "This opening has already finished." });
+      return;
+    }
+    throw error;
+  }
   response.status(202).json({ accepted: true });
 });
 
 // --- Client offer link (no account needed) -----------------------------------------------
 app.get("/api/offers/:openingId/:offerId", async (request, response) => {
   const client = await getClient();
-  const state = await client.workflow.getHandle(request.params.openingId).query(getOpeningState);
+  const handle = client.workflow.getHandle(request.params.openingId);
+  const { status } = await handle.describe();
+  const state: OpeningState =
+    status.name === "RUNNING" ? await handle.query(getOpeningState) : await handle.result();
   const attempt = state.attempts.find((a) => a.offerId === request.params.offerId);
   if (!attempt) {
     response.status(404).json({ error: "We couldn't find this offer." });

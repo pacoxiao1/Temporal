@@ -3,9 +3,6 @@ import type { Opening, WaitlistClient } from "./types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-// Stop offering when the appointment is this close: nobody can realistically get there.
-export const OFFER_CUTOFF_MINUTES = 30;
-
 // Lena's rule: same-day openings get 15 minutes per person. For tomorrow or later there is
 // no fixed rule yet, so staff choose the window when they post the opening.
 export const SAME_DAY_WINDOW_MINUTES = 15;

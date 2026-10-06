@@ -31,12 +31,12 @@ export type OpeningInput = {
 };
 
 export type OpeningStatus =
-  | "offering"
+  | "offering" // someone is holding the offer
+  | "waiting" // everyone matching was contacted; watching for new matches until start time
   | "booking"
   | "filled"
-  | "unfilled"
-  | "cancelled"
-  | "expired";
+  | "unfilled" // the appointment time arrived without anyone accepting
+  | "cancelled";
 
 export type AttemptOutcome =
   | "pending"
@@ -82,6 +82,7 @@ export type OpeningState = {
   bookedClientName?: string;
   bookingRef?: string;
   cancelReason?: string;
+  unfilledReason?: string;
   msPerMinute: number;
 };
 

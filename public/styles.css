@@ -53,6 +53,7 @@ button.link { padding: 2px 6px; background: none; color: #a23b2a; font-size: 0.8
 .opening-head p { margin: 4px 0 0; font-size: 0.85rem; }
 .pill { padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; white-space: nowrap; background: #ece6d8; }
 .pill.offering, .pill.booking { background: #fbf0cf; color: #6b5a1f; }
+.pill.waiting { background: #e3ebf3; color: #2f4c68; }
 .pill.filled { background: #d9ede3; color: #1f5a41; }
 .pill.unfilled, .pill.expired { background: #f6dcd5; color: #8a3020; }
 table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 0.88rem; }
@@ -71,6 +72,18 @@ summary { cursor: pointer; color: var(--green); font-weight: 600; }
 .texts li.confirmation { background: #d9ede3; }
 .texts li.no_longer_available { background: #f3ebe4; }
 .waitlist li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #eee8dc; }
+.waitlist .grow { flex: 1; min-width: 0; }
+.row-actions { display: flex; flex-direction: column; align-items: flex-end; }
+button.link.edit { color: var(--green); }
+.edit-form { margin-top: 10px; padding: 10px; border-radius: 10px; background: #f1efe7; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row label { flex: 1; }
+
+.report-card { margin-top: 20px; overflow-x: auto; }
+.report-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.report-kpis div { padding: 12px 14px; border-radius: 12px; background: #f1efe7; }
+.report-kpis strong { display: block; font-size: 1.5rem; }
+.report-kpis span { color: var(--muted); font-size: 0.8rem; }
 
 .offer-title { font-size: 1.8rem; }
 .offer-when { font-size: 1.1rem; font-weight: 600; }
