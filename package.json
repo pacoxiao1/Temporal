@@ -5,6 +5,7 @@
   "description": "Student starter for the Temporal post-assessment.",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "demo": "node scripts/dev.mjs --demo",
     "dev:api": "tsx src/api.ts",
     "dev:worker": "tsx src/worker.ts",
     "start:temporal": "docker compose up -d temporal",

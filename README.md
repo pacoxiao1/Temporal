@@ -25,19 +25,37 @@ npm install && npm run dev
 `npm run stop` stops the Temporal container. `npm test` runs the Workflow tests (no Docker needed).
 `npm run typecheck` checks TypeScript.
 
-> **Demo speed is on by default:** one minute of a reply window lasts one second, so a same-day
-> offer times out after 15 s. Run with `DEMO_SPEED=off` for real minutes.
->
+### Normal mode vs. demo mode
+
+The app runs in **normal mode** by default: reply windows use real minutes, so a same-day offer is
+held for 15 minutes before moving to the next client. To watch timeouts happen quickly, use
+**demo mode**, where each minute lasts one second (15 minutes → 15 seconds, 30 minutes → 30 seconds).
+
+| Mode | Command | Same-day offer held for |
+| --- | --- | --- |
+| Normal (default) | `npm run dev` | 15 minutes |
+| Demo | `npm run demo` | 15 seconds |
+
+To switch, stop the app with **Ctrl+C** and start it again with the other command. Openings already
+in progress keep the speed they were posted with. For a clean start, run `npm run stop` and delete
+`data/waitlist.local.json` (local waitlist edits) before restarting.
+
+You'll see the active mode in the terminal when the app starts (`Mode: NORMAL` or `Mode: DEMO`), and
+in demo mode the dashboard shows a yellow "Demo speed" note. You can also set the environment variable
+`DEMO_SPEED=on` before `npm run dev`; it's the same as `npm run demo`.
+
 > **Windows note:** if the Worker fails with `SWC native addon: validate cache root ... DACL`,
 > point SWC at a folder only you can write to and set `SWC_NATIVE_BINDING_CACHE` to it
 > (for example `%USERPROFILE%\.swc-cache` with inheritance removed).
 
 ## 3-minute demo
 
+Start in demo mode (`npm run demo`) so the waits below take seconds, not minutes.
+
 1. In **Post an opening**, keep *Color with Maya* and today's date. The preview lists the
    matching clients in the order they'll be offered (Ana → Ben → Chloe), each with 15 minutes.
 2. Click **Start offering**. Ana's text appears under **Client phones**.
-3. Do nothing. After 15 s, Ana shows **Timed out** and Ben is texted automatically.
+3. Do nothing. After 15 s (15 minutes in normal mode), Ana shows **Timed out** and Ben is texted automatically.
 4. Click **Open Ben's offer link** and choose **No thanks**. Chloe is texted immediately.
 5. Open Chloe's link and choose **Yes, book it**. The opening shows **Filled**, with the booking
    reference and the time it took to fill.

@@ -1,6 +1,11 @@
 import { connect } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 
+// `npm run demo` passes --demo: reply windows run fast (1 minute = 1 second).
+// Set here rather than in package.json so it works the same on Windows, macOS and Linux.
+if (process.argv.includes("--demo")) process.env.DEMO_SPEED = "on";
+const demo = ["on", "true", "1"].includes((process.env.DEMO_SPEED ?? "").toLowerCase());
+
 const compose = spawnSync("docker", ["compose", "up", "-d", "temporal"], {
   stdio: "inherit",
 });
@@ -50,7 +55,12 @@ for (const child of children) {
     }
   });
 }
-console.log("\nStarter is launching:");
+console.log("\nJuniper Salon waitlist is launching:");
 console.log("  App:         http://localhost:3000");
-console.log("  Temporal UI: http://localhost:8233\n");
+console.log("  Temporal UI: http://localhost:8233");
+console.log(
+  demo
+    ? "  Mode:        DEMO (1 minute = 1 second; a same-day offer times out after 15 s)\n"
+    : "  Mode:        NORMAL (real minutes; a same-day offer is held for 15 minutes)\n",
+);
 

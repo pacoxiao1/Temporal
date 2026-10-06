@@ -10,9 +10,11 @@ import { cancelOpening, getOpeningState, openingWorkflow, respondToOffer, waitli
 const TASK_QUEUE = "juniper-waitlist";
 const port = Number(process.env.PORT ?? 3000);
 const appUrl = process.env.APP_URL ?? `http://localhost:${port}`;
-// Demo mode: one "minute" of offer window lasts one second so timeouts can be watched live.
-// Set DEMO_SPEED=off for real minutes.
-const msPerMinute = process.env.DEMO_SPEED === "off" ? 60_000 : 1_000;
+// Normal mode uses real minutes (a same-day offer is held for 15 minutes).
+// Demo mode (`npm run demo`, or DEMO_SPEED=on) makes each minute last one second so
+// timeouts can be watched live.
+const demoMode = ["on", "true", "1"].includes((process.env.DEMO_SPEED ?? "").toLowerCase());
+const msPerMinute = demoMode ? 1_000 : 60_000;
 
 export const SERVICES = ["Haircut", "Color", "Blowout"];
 export const STYLISTS = ["Maya", "Jordan", "Priya"];
@@ -70,7 +72,7 @@ app.get("/api/config", (_request, response) => {
     services: SERVICES,
     stylists: STYLISTS,
     windowChoices: LATER_WINDOW_CHOICES,
-    demoMode: msPerMinute !== 60_000,
+    demoMode,
   });
 });
 
