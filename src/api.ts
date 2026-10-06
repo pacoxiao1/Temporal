@@ -285,10 +285,24 @@ app.post("/api/offers/:openingId/:offerId", async (request, response) => {
     return;
   }
   const client = await getClient();
-  const reply: OfferReply = await client.workflow
-    .getHandle(request.params.openingId)
-    .executeUpdate(respondToOffer, { args: [{ offerId: request.params.offerId, answer }] });
-  response.json(reply);
+  const handle = client.workflow.getHandle(request.params.openingId);
+  // An opening that has already finished (filled, cancelled, not filled) can't take replies.
+  // Answer the client kindly instead of surfacing an error from Temporal.
+  const closed: OfferReply = {
+    result: "no_longer_available",
+    message: "Sorry, this opening is no longer available. You're still on our waitlist.",
+  };
+  if ((await handle.describe()).status.name !== "RUNNING") {
+    response.json(closed);
+    return;
+  }
+  try {
+    response.json(await handle.executeUpdate(respondToOffer, { args: [{ offerId: request.params.offerId, answer }] }));
+  } catch (error) {
+    // It finished between the check above and this reply.
+    if ((await handle.describe()).status.name !== "RUNNING") response.json(closed);
+    else throw error;
+  }
 });
 
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {

@@ -206,7 +206,7 @@ async function refreshOpenings() {
   clockSkewMs = Date.parse(now) - Date.now();
   lastOpenings = openings;
   // Active openings first, then the most recent finished ones.
-  const shown = [...openings.filter((o) => ACTIVE.includes(o.status)), ...openings.filter((o) => !ACTIVE.includes(o.status))].slice(0, 8);
+  const shown = [...openings.filter((o) => ACTIVE.includes(o.status)), ...openings.filter((o) => !ACTIVE.includes(o.status))].slice(0, 15);
   const openDetails = new Set([...document.querySelectorAll("#openings details[open]")].map((d) => d.closest("article").dataset.id));
   $("#openings").innerHTML = shown.length ? shown.map(renderOpening).join("") : `<p class="muted">No openings yet.</p>`;
   document.querySelectorAll("#openings article").forEach((el, i) => {
