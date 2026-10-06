@@ -1,4 +1,7 @@
 import { NativeConnection, Worker } from "@temporalio/worker";
+import * as activities from "./activities";
+
+export const TASK_QUEUE = "juniper-waitlist";
 
 async function run(): Promise<void> {
   const connection = await NativeConnection.connect({
@@ -7,10 +10,11 @@ async function run(): Promise<void> {
   const worker = await Worker.create({
     connection,
     namespace: "default",
-    taskQueue: "assessment-starter",
+    taskQueue: TASK_QUEUE,
     workflowsPath: require.resolve("./workflows"),
+    activities,
   });
-  console.log("Worker is polling the assessment-starter task queue.");
+  console.log(`Worker is polling the ${TASK_QUEUE} task queue.`);
   await worker.run();
 }
 
@@ -18,4 +22,3 @@ run().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-

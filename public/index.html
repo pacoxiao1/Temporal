@@ -3,31 +3,82 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Temporal assessment starter</title>
+    <title>Juniper Salon · Openings</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main>
-      <p class="eyebrow">Temporal assessment starter</p>
-      <h1>Your environment is connected.</h1>
-      <p class="intro">
-        This neutral demonstration starts a Workflow, waits durably for a
-        Signal, and then completes. Replace it with the experience your
-        customer needs.
+    <main class="wide">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Juniper Salon · Staff</p>
+          <h1>Fill last-minute openings</h1>
+          <p class="intro">
+            Post a cancelled slot. It's offered to one matching waitlist client at a time,
+            earliest sign-up first, and moves on automatically if they decline or don't reply.
+          </p>
+        </div>
+        <div class="stats" id="stats"></div>
+      </header>
+      <p class="demo-note" id="demo-note" hidden>
+        Demo speed: each minute of a reply window lasts one second. Texts are simulated, see
+        “Client phones” below.
       </p>
-      <section class="card">
-        <h2 id="phase">Ready</h2>
-        <p id="message">Start the demonstration to verify the setup.</p>
-        <button id="start">Start demo Workflow</button>
-        <button id="continue" hidden>Send continue Signal</button>
-        <p class="request-id" id="request-id"></p>
-      </section>
+
+      <div class="grid">
+        <section class="card">
+          <h2>Post an opening</h2>
+          <form id="opening-form" class="form">
+            <label>Service <select name="service" id="service"></select></label>
+            <label>Stylist <select name="stylist" id="stylist"></select></label>
+            <label>Date <input type="date" name="date" required /></label>
+            <label>Time <input type="time" name="time" step="900" required /></label>
+            <label id="window-field">Reply window per client
+              <select name="windowMinutes" id="window"></select>
+              <span class="muted small" id="window-hint"></span>
+            </label>
+            <div class="preview" id="preview">Pick a slot to see who matches.</div>
+            <button type="submit">Start offering</button>
+            <p class="error" id="opening-error"></p>
+          </form>
+        </section>
+
+        <section class="card span2">
+          <h2>Openings</h2>
+          <div id="openings"><p class="muted">No openings yet.</p></div>
+        </section>
+      </div>
+
+      <div class="grid">
+        <section class="card span2">
+          <h2>Client phones <span class="tag">simulated texts</span></h2>
+          <p class="muted small">Open an offer link to act as that client.</p>
+          <div id="messages"><p class="muted">No texts sent yet.</p></div>
+        </section>
+
+        <section class="card">
+          <h2>Waitlist</h2>
+          <div id="waitlist"></div>
+          <details>
+            <summary>Add a client</summary>
+            <form id="waitlist-form" class="form">
+              <label>Name <input name="name" required /></label>
+              <label>Mobile <input name="phone" required placeholder="(555) 010-0000" /></label>
+              <label>Service <select name="service" id="wl-service"></select></label>
+              <label>Stylist <select name="stylist" id="wl-stylist"></select></label>
+              <fieldset class="days" id="wl-days"></fieldset>
+              <label>From <input type="time" name="from" value="09:00" /></label>
+              <label>To <input type="time" name="to" value="19:00" /></label>
+              <button type="submit">Add to waitlist</button>
+            </form>
+          </details>
+        </section>
+      </div>
+
       <p class="footer">
-        Inspect the execution at
+        Every opening is a Temporal Workflow. Inspect them at
         <a href="http://localhost:8233" target="_blank">localhost:8233</a>.
       </p>
     </main>
     <script src="/app.js"></script>
   </body>
 </html>
-

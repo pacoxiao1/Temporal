@@ -1,0 +1,10 @@
+[
+  {"id":"c1","name":"Ana Ruiz","phone":"(555) 010-0101","service":"Color","stylist":"Maya","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-20T15:00:00.000Z"},
+  {"id":"c2","name":"Ben Okafor","phone":"(555) 010-0102","service":"Color","stylist":"Any","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-22T18:30:00.000Z"},
+  {"id":"c3","name":"Chloe Park","phone":"(555) 010-0103","service":"Color","stylist":"Maya","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-25T12:10:00.000Z"},
+  {"id":"c4","name":"Dev Shah","phone":"(555) 010-0104","service":"Color","stylist":"Jordan","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"09:00","to":"19:00","joinedAt":"2026-09-18T10:00:00.000Z"},
+  {"id":"c5","name":"Ella Moreno","phone":"(555) 010-0105","service":"Haircut","stylist":"Any","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-19T09:00:00.000Z"},
+  {"id":"c6","name":"Finn Walsh","phone":"(555) 010-0106","service":"Haircut","stylist":"Jordan","days":["Sat","Sun"],"from":"09:00","to":"17:00","joinedAt":"2026-09-21T14:45:00.000Z"},
+  {"id":"c7","name":"Grace Liu","phone":"(555) 010-0107","service":"Haircut","stylist":"Any","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-26T16:20:00.000Z"},
+  {"id":"c8","name":"Hana Ito","phone":"(555) 010-0108","service":"Blowout","stylist":"Priya","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"from":"07:00","to":"23:59","joinedAt":"2026-09-23T11:00:00.000Z"}
+]
