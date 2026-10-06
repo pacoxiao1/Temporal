@@ -27,10 +27,12 @@ async function waitForPort(port, timeoutMs = 60_000) {
 }
 
 await waitForPort(7233);
-const children = [
-  spawn("npm", ["run", "dev:worker"], { stdio: "inherit" }),
-  spawn("npm", ["run", "dev:api"], { stdio: "inherit" }),
-];
+// On Windows, npm is a .cmd shim that spawn() can only start through a shell.
+const runScript = (name) =>
+  process.platform === "win32"
+    ? spawn(`npm run ${name}`, { stdio: "inherit", shell: true })
+    : spawn("npm", ["run", name], { stdio: "inherit" });
+const children = [runScript("dev:worker"), runScript("dev:api")];
 let shuttingDown = false;
 function shutdown(exitCode = 0) {
   if (shuttingDown) return;
